@@ -43,6 +43,9 @@ types = { path = "../types" }
 worker = { path = "../worker" }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 eyre = "0.6.8"
+serde = { version = "1.0.144", features = ["serde_derive"] }
+async-channel = "1.7.1"
+crossbeam-channel = "0.5.6"
 
 [dev-dependencies]
 hex = "0.4.3"
@@ -53,7 +56,7 @@ structopt = "0.3.26"
 test_utils = { path = "../test_utils" }
 
 [features]
-benchmark = ["worker/benchmark", "primary/benchmark", "consensus/benchmark"]
+benchmark = ["worker/benchmark", "primary/benchmark", "consensus/benchmark", "executor/benchmark"]
 dhat-heap = ["dhat"]    # if you are doing heap profiling
 
 [[bin]]

@@ -1,4 +1,6 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
+# Copyright 2022, 贺梦杰 (njtech_hemengjie@qq.com)
+# SPDX-License-Identifier: Apache-2.0
 from datetime import datetime
 from dateutil import parser
 from glob import glob
@@ -49,9 +51,10 @@ class LogParser:
         except (ValueError, IndexError, AttributeError) as e:
             exception(e)
             raise ParseError(f'Failed to parse nodes\' logs: {e}')
-        proposals, commits, self.configs, primary_ips = zip(*results)
+        proposals, commits, executes, self.configs, primary_ips = zip(*results)
         self.proposals = self._merge_results([x.items() for x in proposals])
         self.commits = self._merge_results([x.items() for x in commits])
+        self.executes = self._merge_results([x.items() for x in executes])
 
         # Parse the workers logs.
         try:
@@ -61,10 +64,15 @@ class LogParser:
             exception(e)
             raise ParseError(f'Failed to parse workers\' logs: {e}')
         sizes, self.received_samples, workers_ips = zip(*results)
-        self.sizes = {
-            k: v for x in sizes for k, v in x.items() if k in self.commits
+        self.mempool_sizes = {
+            k: v for x in sizes for k, v in x.items()
         }
-
+        self.committed_sizes = {
+            k: v for k, v in self.mempool_sizes.items() if k in self.commits
+        }
+        self.executed_sizes = {
+            k: v for k, v in self.committed_sizes.items() if k in self.executes
+        }
         # Determine whether the primary and the workers are collocated.
         self.collocate = set(primary_ips) == set(workers_ips)
 
@@ -112,6 +120,10 @@ class LogParser:
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         commits = self._merge_results([tmp])
 
+        tmp = findall(r'(.*?) .* Executed [^ ]+ -> ([^ ]+=)', log)
+        tmp = [(d, self._to_posix(t)) for t, d in tmp]
+        executes = self._merge_results([tmp])
+
         configs = {
             'header_size': int(
                 search(r'Header size .* (\d+)', log).group(1)
@@ -141,7 +153,7 @@ class LogParser:
 
         ip = search(r'booted on (/ip4/\d+.\d+.\d+.\d+)', log).group(1)
 
-        return proposals, commits, configs, ip
+        return proposals, commits, executes, configs, ip
 
     def _parse_workers(self, log):
         if search(r'(?:panic|ERROR)', log) is not None:
@@ -161,12 +173,15 @@ class LogParser:
         x = parser.isoparse(string[:24])
         return datetime.timestamp(x)
 
+    def _mempool_txns(self):
+        return sum(self.mempool_sizes.values())/self.size[0]
+
     def _consensus_throughput(self):
         if not self.commits:
             return 0, 0, 0
         start, end = min(self.proposals.values()), max(self.commits.values())
         duration = end - start
-        bytes = sum(self.sizes.values())
+        bytes = sum(self.committed_sizes.values())
         bps = bytes / duration
         tps = bps / self.size[0]
         return tps, bps, duration
@@ -175,12 +190,33 @@ class LogParser:
         latency = [c - self.proposals[d] for d, c in self.commits.items()]
         return mean(latency) if latency else 0
 
-    def _end_to_end_throughput(self):
-        if not self.commits:
-            return 0, 0, 0
-        start, end = min(self.start), max(self.commits.values())
+    def _committed_txns(self):
+        return sum(self.committed_sizes.values())/self.size[0]
+
+    def _execution_throughput(self):
+        if not self.executes:
+            return 0, 0
+        start, end = min(self.commits.values()), max(self.executes.values())
         duration = end - start
-        bytes = sum(self.sizes.values())
+        bytes = sum(self.executed_sizes.values())
+        bps = bytes / duration
+        tps = bps / self.size[0]
+        return tps, duration
+
+    def _execution_latency(self):
+        latency = [c - self.commits[d] for d, c in self.executes.items()]
+        return mean(latency) if latency else 0
+
+    def _executed_txns(self):
+        return sum(self.executed_sizes.values())/self.size[0]
+
+    # meaningless end to end
+    def _end_to_end_throughput(self):
+        if not self.executes:
+            return 0, 0, 0
+        start, end = min(self.start), max(self.executes.values())
+        duration = end - start
+        bytes = sum(self.executed_sizes.values())
         bps = bytes / duration
         tps = bps / self.size[0]
         return tps, bps, duration
@@ -189,10 +225,10 @@ class LogParser:
         latency = []
         for sent, received in zip(self.sent_samples, self.received_samples):
             for tx_id, batch_id in received.items():
-                if batch_id in self.commits:
+                if batch_id in self.executes:
                     assert tx_id in sent  # We receive txs that we sent.
                     start = sent[tx_id]
-                    end = self.commits[batch_id]
+                    end = self.executes[batch_id]
                     latency += [end-start]
         return mean(latency) if latency else 0
 
@@ -206,8 +242,13 @@ class LogParser:
         max_batch_delay = self.configs[0]['max_batch_delay']
         max_concurrent_requests = self.configs[0]['max_concurrent_requests']
 
+        mempool_txns = self._mempool_txns()
         consensus_latency = self._consensus_latency() * 1_000
         consensus_tps, consensus_bps, _ = self._consensus_throughput()
+        committed_txns = self._committed_txns()
+        execution_tps, _ = self._execution_throughput()
+        execution_latency = self._execution_latency() * 1_000
+        executed_txns = self._executed_txns()
         end_to_end_tps, end_to_end_bps, duration = self._end_to_end_throughput()
         end_to_end_latency = self._end_to_end_latency() * 1_000
 
@@ -235,9 +276,16 @@ class LogParser:
             f' Max concurrent requests: {max_concurrent_requests:,} \n'
             '\n'
             ' + RESULTS:\n'
+            f' Mempool Txns: {round(mempool_txns):,} tx\n'
+            '\n'
+            f' Committed Txns: {round(committed_txns):,} tx\n'
             f' Consensus TPS: {round(consensus_tps):,} tx/s\n'
             f' Consensus BPS: {round(consensus_bps):,} B/s\n'
             f' Consensus latency: {round(consensus_latency):,} ms\n'
+            '\n'
+            f' Executed Txns: {round(executed_txns):,} tx\n'
+            f' Execution TPS: {round(execution_tps):,} tx/s\n'
+            f' Execution latency: {round(execution_latency):,} ms\n'
             '\n'
             f' End-to-end TPS: {round(end_to_end_tps):,} tx/s\n'
             f' End-to-end BPS: {round(end_to_end_bps):,} B/s\n'

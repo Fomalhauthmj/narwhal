@@ -1,5 +1,6 @@
 // Copyright (c) 2021, Facebook, Inc. and its affiliates
 // Copyright (c) 2022, Mysten Labs, Inc.
+// Copyright 2022, 贺梦杰 (njtech_hemengjie@qq.com)
 // SPDX-License-Identifier: Apache-2.0
 #![warn(
     future_incompatible,
@@ -17,7 +18,7 @@ use eyre::Context;
 use fastcrypto::{ed25519::Ed25519KeyPair, generate_production_keypair, traits::KeyPair as _};
 use futures::future::join_all;
 use node::{
-    execution_state::SimpleExecutionState,
+    memory_execution_engine::MemoryKVExecutionEngine,
     metrics::{primary_metrics_registry, start_prometheus_server, worker_metrics_registry},
     Node, NodeStorage,
 };
@@ -217,7 +218,7 @@ async fn run(
                 &store,
                 parameters.clone(),
                 /* consensus */ !sub_matches.is_present("consensus-disabled"),
-                /* execution_state */ Arc::new(SimpleExecutionState::default()),
+                /* execution_state */ Arc::new(MemoryKVExecutionEngine::default()),
                 tx_transaction_confirmation,
                 &registry,
             )
@@ -265,7 +266,9 @@ async fn run(
 }
 
 /// Receives an ordered list of certificates and apply any application-specific logic.
-async fn analyze(mut rx_output: Receiver<(SubscriberResult<Vec<u8>>, SerializedTransaction)>) {
+async fn analyze(
+    mut rx_output: Receiver<(SubscriberResult<Option<String>>, SerializedTransaction)>,
+) {
     while let Some(_message) = rx_output.recv().await {
         // NOTE: Notify the user that its transaction has been processed.
     }

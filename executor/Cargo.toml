@@ -42,3 +42,7 @@ primary = { path = "../primary" }
 test_utils = { path = "../test_utils" }
 types = { path = "../types" }
 telemetry-subscribers = { git = "https://github.com/mystenlabs/mysten-infra.git", rev = "9deac015fbf66e24b6da9699630e06750eaa094a" }
+
+
+[features]
+benchmark = []

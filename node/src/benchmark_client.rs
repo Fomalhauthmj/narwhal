@@ -1,10 +1,12 @@
 // Copyright (c) 2021, Facebook, Inc. and its affiliates
 // Copyright (c) 2022, Mysten Labs, Inc.
+// Copyright 2022, 贺梦杰 (njtech_hemengjie@qq.com)
 // SPDX-License-Identifier: Apache-2.0
 use bytes::{BufMut as _, BytesMut};
 use clap::{crate_name, crate_version, App, AppSettings};
 use eyre::Context;
 use futures::{future::join_all, StreamExt};
+use node::kv_transaction::{random_string, KVTransaction};
 use rand::Rng;
 use tokio::{
     net::TcpStream,
@@ -125,12 +127,15 @@ impl Client {
             )));
         }
 
-        // The transaction size must be at least 16 bytes to ensure all txs are different.
+        // The transaction size must be at least 32 bytes to ensure all txs are different.
         if self.size < 9 {
             return Err(eyre::Report::msg(
                 "Transaction size must be at least 9 bytes",
             ));
         }
+
+        // Ensure size is big enough to generate valid kv transaction.
+        assert!(self.size >= 32);
 
         // Connect to the mempool.
         let mut client = TransactionsClient::connect(self.target.as_str().to_owned())
@@ -143,13 +148,30 @@ impl Client {
         let interval = interval(Duration::from_millis(BURST_DURATION));
         tokio::pin!(interval);
 
+        let (tx_transactions, rx_transactions) = crossbeam_channel::unbounded();
+        let size = self.size;
+        tokio::spawn(async move {
+            let x = 0;
+            loop {
+                let kv_transaction = match x % 3 {
+                    0 => KVTransaction::Insert(
+                        random_string((size - 29) / 2),
+                        random_string((size - 29) / 2 + (size - 29) % 2),
+                    ),
+                    1 => KVTransaction::Get(random_string(size - 21)),
+                    2 => KVTransaction::Remove(random_string(size - 21)),
+                    _ => unreachable!(),
+                };
+                let _ = tx_transactions.send(kv_transaction);
+            }
+        });
+
         // NOTE: This log entry is used to compute performance.
         info!("Start sending transactions");
-
         'main: loop {
             interval.as_mut().tick().await;
             let now = Instant::now();
-
+            let rx = rx_transactions.clone();
             let mut tx = BytesMut::with_capacity(self.size);
             let size = self.size;
             let stream = tokio_stream::iter(0..burst).map(move |x| {
@@ -164,8 +186,9 @@ impl Client {
                     tx.put_u8(1u8); // Standard txs start with 1.
                     tx.put_u64(r); // Ensures all clients send different txs.
                 };
-
-                tx.resize(size, 0u8);
+                let txn = rx.recv().unwrap();
+                tx.put(&*bincode::serialize(&txn).unwrap());
+                assert!(tx.len() == size);
                 let bytes = tx.split().freeze();
                 TransactionProto { transaction: bytes }
             });

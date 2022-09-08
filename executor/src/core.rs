@@ -1,4 +1,5 @@
 // Copyright (c) 2022, Mysten Labs, Inc.
+// Copyright 2022, 贺梦杰 (njtech_hemengjie@qq.com)
 // SPDX-License-Identifier: Apache-2.0
 use crate::{
     bail,
@@ -145,6 +146,9 @@ where
             {
                 self.execute_batch(message, certificate_id, *digest, total_batches)
                     .await?;
+                #[cfg(feature = "benchmark")]
+                // NOTE: This log entry is used to compute performance.
+                tracing::info!("Executed {} -> {:?}", certificate_id, digest);
             }
         }
         Ok(())
