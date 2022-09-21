@@ -45,3 +45,4 @@ telemetry-subscribers = "0.1.0"
 
 anemo = { git = "https://github.com/mystenlabs/anemo.git", rev = "6278d0fa78147a49ff2cb9dd2e45e763886be0a0" }
 tower = { version = "0.4.13", features = ["full"] }
+rayon = "1.5.3"

@@ -15,6 +15,7 @@ use fastcrypto::{
 use indexmap::IndexMap;
 use multiaddr::Multiaddr;
 use rand::{rngs::OsRng, Rng};
+use rayon::prelude::{ParallelIterator, IntoParallelRefIterator, IntoParallelIterator};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     num::NonZeroUsize,
@@ -648,6 +649,11 @@ impl CommitteeFixture {
         self.authorities.iter()
     }
 
+    /// parallel iter (rayon) for authorities
+    pub fn par_authorities(&self) -> impl ParallelIterator<Item = &AuthorityFixture>{
+        self.authorities.par_iter()
+    }
+
     pub fn builder() -> Builder {
         Builder::new()
     }
@@ -703,9 +709,7 @@ impl CommitteeFixture {
         parents: &BTreeSet<CertificateDigest>,
     ) -> (Round, Vec<Header>) {
         let round = prior_round + 1;
-        let next_headers = self
-            .authorities
-            .iter()
+        let next_headers = self.par_authorities()
             .map(|a| {
                 let builder = types::HeaderBuilder::default();
                 builder
@@ -723,7 +727,7 @@ impl CommitteeFixture {
     }
 
     pub fn votes(&self, header: &Header) -> Vec<Vote> {
-        self.authorities()
+        self.par_authorities()
             .flat_map(|a| {
                 // we should not re-sign using the key of the authority
                 // that produced the header
@@ -740,7 +744,7 @@ impl CommitteeFixture {
         let committee = self.committee();
         let votes: Vec<_> = self
             .votes(header)
-            .into_iter()
+            .into_par_iter()
             .map(|x| (x.author, x.signature))
             .collect();
         Certificate::new(&committee, header.clone(), votes).unwrap()
